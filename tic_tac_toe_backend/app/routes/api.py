@@ -7,6 +7,14 @@ import jwt
 from datetime import datetime, timedelta
 
 from ..models import db, User, Game, Participation, Move, GameHistory
+from ..game_logic import (
+    validate_move,
+    next_player_symbol,
+    apply_move,
+    get_winner,
+    is_draw,
+    get_game_status,
+)
 
 blp = Blueprint(
     "API", "api",
@@ -235,46 +243,41 @@ class GameMove(MethodView):
             abort(400, message="Game hasn't started (need two players)")
 
         symbol = part.symbol
-        # Determine player turn: count moves and enforce turn (X starts, alternates)
+
+        # Fetch all moves for game and determine turn using dedicated logic function
         moves = Move.query.filter_by(game_id=game_id).order_by(Move.timestamp.asc()).all()
-        board = list(game.board_state)
-        expected_symbol = "X" if len(moves) % 2 == 0 else "O"
+        expected_symbol = next_player_symbol(len(moves))
         if symbol != expected_symbol:
             abort(400, message=f"Not your turn. It is {expected_symbol}'s turn.")
 
-        if board[pos] != " ":
-            abort(400, message="Cell already occupied")
+        board_state = game.board_state
+        if not validate_move(board_state, pos):
+            abort(400, message="Cell already occupied or invalid position")
 
-        # Apply move
-        board[pos] = symbol
+        # Apply move using logic module
+        new_board_state = apply_move(board_state, pos, symbol)
         move = Move(game_id=game_id, user_id=current_user.id, position=pos, symbol=symbol)
-        game.board_state = "".join(board)
+        game.board_state = new_board_state
         db.session.add(move)
 
-        # Check for winner/draw
-        winner = _check_ttt_winner(board)
-        if winner:
+        # Check for winner/draw using logic module
+        winner_symbol = get_winner(new_board_state)
+        draw = is_draw(new_board_state)
+
+        if winner_symbol:
             game.status = "FINISHED"
             game.winner_id = part.user_id
-            db.session.add(GameHistory(game_id=game.id, winner_id=part.user_id, board_state=game.board_state))
-        elif " " not in board:
+            db.session.add(GameHistory(game_id=game.id, winner_id=part.user_id, board_state=new_board_state))
+        elif draw:
             game.status = "FINISHED"
-            db.session.add(GameHistory(game_id=game.id, winner_id=None, board_state=game.board_state))
+            db.session.add(GameHistory(game_id=game.id, winner_id=None, board_state=new_board_state))
+        else:
+            # If still moves left and no winner, mark as in progress
+            game.status = get_game_status(new_board_state)
 
         db.session.commit()
         return game
 
-def _check_ttt_winner(board):
-    """Returns 'X', 'O', or None. Board is list of len 9."""
-    lines = [
-        (0,1,2), (3,4,5), (6,7,8),  # rows
-        (0,3,6), (1,4,7), (2,5,8),  # cols
-        (0,4,8), (2,4,6)            # diags
-    ]
-    for i,j,k in lines:
-        if board[i] == board[j] == board[k] and board[i] in ("X","O"):
-            return board[i]
-    return None
 
 # --- Game State/History Endpoints ---
 
