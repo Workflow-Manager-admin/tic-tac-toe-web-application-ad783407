@@ -5,6 +5,7 @@ from flask_migrate import Migrate
 from flask_smorest import Api
 from .routes.health import blp
 from .models import db
+from .routes.api import blp as apiblueprint
 
 app = Flask(__name__)
 app.url_map.strict_slashes = False
@@ -38,3 +39,4 @@ migrate = Migrate(app, db)
 
 api = Api(app)
 api.register_blueprint(blp)
+api.register_blueprint(apiblueprint)
